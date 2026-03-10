@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# JavaScript (Vite/React)
+node_modules/
+dist/
+dist-ssr/
+*.local
+.vscode/
+
+# Project Specific (Sensitive)
+backend/gee_key.json*
+backend/*.json
+!backend/package.json
+!backend/requirements.txt
+!backend/Dockerfile
+
+# OS
+.DS_Store
+Thumbs.db
