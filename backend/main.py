@@ -66,10 +66,13 @@ class ClimateResult(BaseModel):
     precipSeries: List[float]
     geeStatus: str
 
-def init_gee(json_path: str):
+def init_gee(json_data: dict | str):
     try:
-        with open(json_path, 'r') as f:
-            creds_data = json.load(f)
+        if isinstance(json_data, str):
+            creds_data = json.loads(json_data)
+        else:
+            creds_data = json_data
+            
         credentials = ee.ServiceAccountCredentials(creds_data['client_email'], key_data=json.dumps(creds_data))
         ee.Initialize(credentials)
         return True
@@ -204,6 +207,11 @@ async def analyze_mosaic(
 
 # --- Constants ---
 def get_default_key_path():
+    # 1. First priority: Environment variable (good for Render/Docker)
+    env_json = os.environ.get("GEE_JSON")
+    if env_json:
+        return "ENV"
+
     base_dir = os.path.dirname(__file__)
     # Support both gee_key.json and the common Windows "gee_key.json.json" mistake
     paths = [
@@ -217,8 +225,9 @@ def get_default_key_path():
 
 @app.get("/api/check_gee")
 async def check_gee_status():
-    """Check if a default GEE key is available locally."""
-    return {"available": get_default_key_path() is not None}
+    """Check if a default GEE key is available locally or in ENV."""
+    status = get_default_key_path()
+    return {"available": status is not None}
 
 @app.post("/api/climate", response_model=ClimateResult)
 async def get_climate(
@@ -248,46 +257,79 @@ async def get_climate(
             tmp_json.write(await gee_key.read())
             key_path = tmp_json.name
             is_temp = True
-    # 2. Otherwise check if we have a default local key
+    # 2. Check environment variable
+    elif os.environ.get("GEE_JSON"):
+        env_json = os.environ.get("GEE_JSON")
+        if init_gee(env_json):
+            gee_status = "Connected (Cloud ENV)"
+        else:
+            gee_status = "Error: Invalid GEE_JSON ENV"
+    # 3. Check default local path
     else:
         key_path = get_default_key_path()
-        is_temp = False
+        if key_path and key_path != "ENV": # Local file case
+            if init_gee(key_path):
+                gee_status = "Connected (Server Auto-detect)"
+            else:
+                gee_status = "Error: Local Key Init Failed"
 
+    # If we have a physical key file (upload or local), initialize it
+    if key_path and key_path != "ENV" and "Connected" not in gee_status:
+        # For uploaded/local files, we need to read them
+        try:
+            with open(key_path, 'r') as f:
+                json_data = json.load(f)
+            if init_gee(json_data):
+                gee_status = "Connected (Uploaded/Local File)"
+            else:
+                gee_status = "Error: File Init Failed"
+        except Exception as e:
+            gee_status = f"Error: Key Read Failed - {str(e)}"
+    
     # GEE Approach
-    if key_path:
-        if init_gee(key_path):
-            try:
-                region = ee.Geometry.Rectangle(bbox_list)
-                era5 = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_BY_HOUR")
+    if "Connected" in gee_status:
+        try:
+            region = ee.Geometry.Rectangle(bbox_list)
+            era5 = ee.ImageCollection("ECMWF/ERA5_LAND/MONTHLY_BY_HOUR")
+            
+            for y in year_list:
+                start_date = f"{int(y)}-01-01"
+                end_date = f"{int(y)+1}-01-01"
                 
-                for y in year_list:
-                    start_date = f"{int(y)}-01-01"
-                    end_date = f"{int(y)+1}-01-01"
-                    
-                    annual = era5.filterBounds(region).filterDate(start_date, end_date)
-                    mean_temp_img = annual.select('temperature_2m').mean().subtract(273.15)
-                    total_precip_img = annual.select('total_precipitation').sum().multiply(1000)
-                    
-                    stats = ee.Image.cat([mean_temp_img, total_precip_img]).reduceRegion(
-                        reducer=ee.Reducer.mean(),
-                        geometry=region,
-                        scale=11132
-                    ).getInfo()
-                    
-                    if stats and 'temperature_2m' in stats:
-                        timeline.append(y)
-                        temp_series.append(round(stats['temperature_2m'], 1))
+                annual = era5.filterBounds(region).filterDate(start_date, end_date)
+                mean_temp_img = annual.select('temperature_2m').mean().subtract(273.15)
+                total_precip_img = annual.select('total_precipitation').sum().multiply(1000)
+                
+                stats = ee.Image.cat([mean_temp_img, total_precip_img]).reduceRegion(
+                    reducer=ee.Reducer.mean(),
+                    geometry=region,
+                    scale=11132
+                ).getInfo()
+                
+                if stats and 'temperature_2m' in stats:
+                    timeline.append(y)
+                    temp_series.append(round(stats['temperature_2m'], 1))
+                    if 'total_precipitation' in stats:
                         precip_series.append(round(stats['total_precipitation'], 1))
-                        gee_status = "Success"
                     else:
-                        gee_status = "No valid data found"
-            except Exception as e:
-                gee_status = f"GEE Query Error: {str(e)[:50]}"
-        else:
-            gee_status = "GEE Authorization Failed"
-        
-        if is_temp and key_path and os.path.exists(key_path):
+                        precip_series.append(0.0)
+                    gee_status = "Success"
+                else:
+                    print(f"No data for year {y}")
+            
+            if not timeline:
+                gee_status = "No valid data found for these years"
+        except Exception as e:
+            gee_status = f"GEE Query Error: {str(e)[:50]}"
+    else:
+        gee_status = "GEE Authorization Failed or Not Provided"
+    
+    # Cleanup temp file if exists
+    if is_temp and key_path and os.path.exists(key_path):
+        try:
             os.unlink(key_path)
+        except:
+            pass
 
     # Fallback to random if GEE fail or missing
     if len(timeline) == 0:

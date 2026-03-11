@@ -114,16 +114,22 @@ const Dashboard = () => {
                 const response = await fetch(`${API_BASE}/api/analyze_mosaic`, {
                     method: 'POST',
                     body: formData,
+                    // Note: Browser fetch doesn't have a built-in timeout, but we can use AbortController if needed.
+                    // For now, let's just improve the error logging.
                 });
 
-                if (!response.ok) throw new Error('Mosaic failed');
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    throw new Error(`Server returned ${response.status}: ${errorText}`);
+                }
                 const data = await response.json();
                 allBboxes.push(data.bbox);
                 updatedNodes.push({ ...node, result: data });
             } catch (err) {
                 console.error(`Error processing node ${node.year}:`, err);
                 processingErrors = true;
-                updatedNodes.push({ ...node, result: { error: true } });
+                updatedNodes.push({ ...node, result: { error: true, message: err.message } });
+                alert(`Error processing ${node.year}: ${err.message}\n\nPlease check if your backend URL (${API_BASE}) is correct and accessible.`);
             }
             updateProgress(`Completed mosaic for ${node.year}`);
         }
