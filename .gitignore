@@ -1,23 +1,31 @@
-# Python
+# Python 缓存
 __pycache__/
-*.py[cod]
-*$py.class
+*.pyc
+
+# 本地环境
 venv/
 .env
-
-# JavaScript (Vite/React)
 node_modules/
 dist/
 dist-ssr/
 *.local
 .vscode/
 
-# Project Specific (Sensitive)
+# Project Specific (Data & Sensitive)
 backend/gee_key.json*
 backend/*.json
 !backend/package.json
 !backend/requirements.txt
 !backend/Dockerfile
+backend/workspace_records/
+backend/workspace_mosaics/
+backend/*.tif
+backend/*.png
+backend/*.svg
+
+# GIS/科研产生的临时结果 (除非你想备份图表)
+*.png
+lint_out.txt
 
 # OS
 .DS_Store
